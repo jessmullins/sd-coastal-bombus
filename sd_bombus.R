@@ -5,23 +5,54 @@
 #    NLCD impervious surface (mean % impervious in a circular window), plus a
 #    protected-area check
 #
-# See README.md for setup. Inputs all go in the data/ folder (subfolders are fine):
-#   - iNat export CSV (observations-XXXXXX.csv)
-#       query: taxon_id=52775 (Bombus), place = San Diego County
-#       columns: id, url, observed_on, latitude, longitude, positional_accuracy,
-#                coordinates_obscured, geoprivacy, taxon_geoprivacy, captive_cultivated,
-#                quality_grade, scientific_name, user_login, description,
-#                private_latitude, private_longitude
-#       Export while logged in as a project manager so private_* columns are filled
-#       for observers who trust you or the project.
-#       observation fields: "Interaction->Visited flower of" (field id 3126)
-#   - EPA Level IV ecoregions: ca_eco_l4/ca_eco_l4.shp
-#   - Annual NLCD fractional impervious surface .tif (mrlc.gov)
-#   - CPAD 2026a release, Holdings shapefile (calands.org)
-#   - Fine-scale vegetation map of western San Diego County, e.g. CDFW BIOS
-#       "Vegetation - Western San Diego County [ds2964]" (2012) or the SanGIS
-#       ECO_VEGETATION_CN layer. Used as the positive "natural habitat" layer so
-#       narrow urban canyons aren't dropped by the impervious-surface windows.
+# =============================================================================
+# DATA DOWNLOADS: do this once before running
+# =============================================================================
+# Put everything in the data/ folder of this project. Unzip each download into
+# its own subfolder; the script finds files by name, so folder names don't matter.
+#
+# 1. iNaturalist observations  ->  observations-XXXXXX.csv
+#    https://www.inaturalist.org/observations/export
+#    Log in as a manager of the San Diego County bees project first, so the
+#    private_latitude / private_longitude columns get filled for observers who
+#    trust the project.
+#    - Query: taxon_id=52775 (Bombus), place = San Diego County
+#    - Columns: id, url, observed_on, latitude, longitude, private_latitude,
+#      private_longitude, positional_accuracy, coordinates_obscured, geoprivacy,
+#      taxon_geoprivacy, captive_cultivated, quality_grade, scientific_name,
+#      user_login
+#    - Observation fields: tick "Interaction->Visited flower of" (required), plus
+#      "nectar / pollen delivering plant", "nectar plant", "Associated species
+#      with names lookup", "name of associated plant", "Plant association",
+#      "feeding on"
+#    Never commit this file: it contains coordinates shared in trust.
+#
+# 2. EPA Level IV ecoregions  ->  ca_eco_l4.shp (+ .dbf, .shx, .prj)
+#    https://www.epa.gov/eco-research/ecoregion-download-files-state-region-9
+#    Under California, download the Level IV shapefile (ca_eco_l4), not Level III.
+#
+# 3. NLCD fractional impervious surface  ->  a .tif with "FctImp" in the name
+#    https://www.mrlc.gov/data
+#    Choose Annual NLCD, Fractional Impervious Surface, the most recent year,
+#    CONUS. The national file is several GB; the script crops it to San Diego
+#    County on the first run and caches the crop in outputs/.
+#    If you clip it yourself instead (e.g. with the MRLC Viewer), make sure
+#    "FctImp" is still in the file name.
+#
+# 4. California Protected Areas Database  ->  a .shp with "Holdings" in the name
+#    https://www.calands.org/cpad/
+#    Download "California Protected Areas Database 2026a Release" (the shapefile
+#    zip, not the ArcGIS REST services). It contains Holdings, Units and
+#    SuperUnits; the script uses Holdings.
+#
+# 5. Vegetation, western San Diego County  ->  a .shp or .gpkg with "ds2964" or
+#    "veg" in the name
+#    https://catalog.data.gov/dataset/vegetation-western-san-diego-county-ds2964
+#    (CDFW BIOS ds2964). The class column is CalVegType. If it downloads as a
+#    geodatabase (.gdb folder), set veg_file by hand in the PATHS block below.
+#
+# Everything else (county boundary, coastline) downloads automatically.
+# =============================================================================
 
 library(readr)
 library(dplyr)
@@ -50,21 +81,24 @@ if (!dir.exists(data_dir))
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Find exactly one file inside data/ (searches its subfolders)
-find_file <- function(pattern) {
+find_file <- function(pattern, what) {
   hits <- list.files(data_dir, pattern = pattern, recursive = TRUE,
                      full.names = TRUE, ignore.case = TRUE)
-  if (length(hits) == 0) stop("No file matching '", pattern, "' in ", data_dir,
-                              ". See README.md for what to download.")
-  if (length(hits) > 1)  stop("Several files match '", pattern, "':\n",
-                              paste(hits, collapse = "\n"))
+  if (length(hits) == 0)
+    stop("Missing input: ", what, "\nNo file matching '", pattern, "' in ", data_dir,
+         "\nSee DATA DOWNLOADS at the top of this script for where to get it.",
+         call. = FALSE)
+  if (length(hits) > 1)
+    stop("Several files match '", pattern, "' (", what, "):\n",
+         paste(hits, collapse = "\n"), "\nKeep just one.", call. = FALSE)
   hits
 }
 
-inat_file <- find_file("^observations-.*\\.csv$")
-eco_file  <- find_file("^ca_eco_l4\\.shp$")
-nlcd_file <- find_file("FctImp.*\\.tif$")     # NLCD fractional impervious
-cpad_file <- find_file("Holdings.*\\.shp$")   # CPAD holdings
-veg_file  <- find_file("(ds2964|veg).*\\.(shp|gpkg)$")   # vegetation map
+inat_file <- find_file("^observations-.*\\.csv$",           "iNaturalist export (download 1)")
+eco_file  <- find_file("^ca_eco_l4\\.shp$",                 "EPA Level IV ecoregions (download 2)")
+nlcd_file <- find_file("FctImp.*\\.tif$",                   "NLCD impervious surface (download 3)")
+cpad_file <- find_file("Holdings.*\\.shp$",                 "CPAD Holdings (download 4)")
+veg_file  <- find_file("(ds2964|veg).*\\.(shp|gpkg)$",      "vegetation map (download 5)")
 # If the vegetation download is a geodatabase (.gdb folder), set the path directly:
 # veg_file <- file.path(data_dir, "FOLDER", "ds2964.gdb")
 
@@ -369,32 +403,32 @@ calib_labels <- read_csv(calib_file, col_types = cols(.default = col_character()
 
 if (nrow(calib_labels) >= 20) {
   print(count(calib_labels, label))
-
+  
   calib <- calib_labels |>
     select(id, label) |>
     inner_join(st_drop_geometry(obs_sf) |>
                  select(id, in_cpad, in_veg_poly, near_veg, starts_with("imp_")),
                by = "id") |>
     mutate(truth_natural = label != "garden")
-
+  
   # How well does a TRUE/FALSE "keep" vector match your labels?
   score_pass <- function(pass) tibble(
     gardens_removed   = mean(!pass[calib$label == "garden"]),
     canyons_kept      = mean(pass[calib$label == "canyon"]),
     reserves_kept     = mean(pass[calib$label == "reserve"]),
     balanced_accuracy = (mean(!pass[!calib$truth_natural]) +
-                         mean(pass[calib$truth_natural])) / 2
+                           mean(pass[calib$truth_natural])) / 2
   )
-
+  
   window_pass <- function(radius, threshold, cpad_rule) {
     imp <- calib[[paste0("imp_", radius, "m")]]
     !is.na(imp) & (imp < threshold | (cpad_rule & calib$in_cpad & imp < cpad_imp_cap))
   }
-
+  
   score_rule <- function(radius, threshold, cpad_rule)
     bind_cols(tibble(radius, threshold, cpad_rule),
               score_pass(window_pass(radius, threshold, cpad_rule)))
-
+  
   # Vegetation-based rules, scored the same way
   current_window <- window_pass(imp_radius, imp_thresh, TRUE)
   veg_scores <- bind_rows(
@@ -407,21 +441,21 @@ if (nrow(calib_labels) >= 20) {
   cat("\nVegetation-based rules:\n")
   print(veg_scores)
   write_csv(veg_scores, file.path(out_dir, "calibration_scores_vegetation.csv"))
-
+  
   rule_grid <- expand_grid(radius = buffer_radii,
                            threshold = seq(5, 50, by = 5),
                            cpad_rule = c(FALSE, TRUE))
   calib_scores <- bind_rows(Map(score_rule, rule_grid$radius,
                                 rule_grid$threshold, rule_grid$cpad_rule)) |>
     arrange(desc(balanced_accuracy))
-
+  
   cat("\nBest rules (balanced accuracy = average of gardens removed and natural kept):\n")
   print(head(calib_scores, 10))
   cat("\nCurrent rule:\n")
   print(filter(calib_scores, radius == imp_radius, threshold == imp_thresh, cpad_rule))
-
+  
   write_csv(calib_scores, file.path(out_dir, "calibration_scores.csv"))
-
+  
   p_calib <- ggplot(calib_scores,
                     aes(threshold, balanced_accuracy, colour = factor(radius),
                         linetype = cpad_rule)) +
@@ -439,7 +473,7 @@ if (nrow(calib_labels) >= 20) {
 obs_sf <- obs_sf |>
   mutate(
     window_ok     = !is.na(imp_main) &
-                    (imp_main < imp_thresh | (in_cpad & imp_main < cpad_imp_cap)),
+      (imp_main < imp_thresh | (in_cpad & imp_main < cpad_imp_cap)),
     # Why each point counts as natural (or not); first match wins
     habitat_basis = case_when(
       in_veg_poly ~ "inside natural vegetation",
@@ -559,7 +593,7 @@ build_map <- function(pts, veg_tolerance = 5) {
                    project = TRUE, method = "ngb", group = "Low-impervious mask") |>
     addPolylines(data = st_transform(st_cast(coastal_poly, "MULTILINESTRING"), 4326),
                  color = "#2b6c8f", weight = 2, group = "Coastal ecoregions")
-
+  
   for (s in status_levels) {
     d <- filter(pts, status == s)
     if (nrow(d) == 0) next
@@ -575,7 +609,7 @@ build_map <- function(pts, veg_tolerance = 5) {
                       "<br>Habitat: ", habitat_basis, " (", veg_class, ")",
                       "<br><a href='", url, "' target='_blank'>Open on iNaturalist</a>"))
   }
-
+  
   m |>
     addLayersControl(baseGroups = c("Satellite", "Light"),
                      overlayGroups = c(status_levels, "Natural vegetation",
